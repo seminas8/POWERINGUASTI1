@@ -1607,155 +1607,133 @@
           return;
         }
 
-        // Controlla se le librerie sono caricate
-        if (typeof L === 'undefined') {
-          notifications.add('error', 'Leaflet non caricato');
-          return;
+        // Funzione per rilevare il tipo di dispositivo
+        function detectDevice() {
+          const userAgent = navigator.userAgent.toLowerCase();
+          const platform = navigator.platform.toLowerCase();
+          
+          if (/iphone|ipad|ipod/.test(userAgent)) {
+            return 'ios';
+          } else if (/android/.test(userAgent)) {
+            return 'android';
+          } else if (/mobile|tablet/.test(userAgent)) {
+            return 'mobile';
+          } else {
+            return 'desktop';
+          }
         }
 
-        if (typeof L.Routing === 'undefined' || !L.Routing.control) {
-          // Fallback: apri Google Maps in una nuova scheda
-          const googleMapsUrl = `https://www.google.com/maps/dir///${eventLat},${eventLon}/@${eventLat},${eventLon},15z`;
-          window.open(googleMapsUrl, '_blank');
-          notifications.add('success', 'Indicazioni aperte in Google Maps');
-          closeEventDetails();
-          return;
-        }
-
-        // Ottieni la posizione corrente dell'utente
-        if (!navigator.geolocation) {
-          notifications.add('warning', 'Geolocalizzazione non supportata. Apertura Google Maps...');
-          const googleMapsUrl = `https://www.google.com/maps/dir///${eventLat},${eventLon}/@${eventLat},${eventLon},15z`;
-          window.open(googleMapsUrl, '_blank');
-          closeEventDetails();
-          return;
-        }
-
-        notifications.add('info', 'Richiesta posizione in corso...');
-
-        navigator.geolocation.getCurrentPosition((position) => {
-          const userLat = position.coords.latitude;
-          const userLon = position.coords.longitude;
-
-          try {
-            // Inizializza il routing machine con controlli di sicurezza
-            const control = L.Routing.control({
-              waypoints: [
-                L.latLng(userLat, userLon),
-                L.latLng(eventLat, eventLon)
-              ],
-              routeWhileDragging: false,
-              addWaypoints: false,
-              createMarker: function() { return null; }, // Non creare marker automatici
-              lineOptions: {
-                styles: [{ color: '#007bff', weight: 5, opacity: 0.7 }]
-              },
-              router: L.Routing.osrmv1({
-                serviceUrl: 'https://router.project-osrm.org/route/v1/driving',
-                profile: 'driving',
-                language: 'it'
-              }),
-              formatter: new L.Routing.Formatter({ language: 'it' }),
-              show: false
-            });
-
-            let routeFound = false;
-
-            // Timeout di sicurezza
-            const timeoutId = setTimeout(() => {
-              if (!routeFound) {
-                try {
-                  map.removeControl(control);
-                } catch (e) {}
-                const googleMapsUrl = `https://www.google.com/maps/dir/${userLat},${userLon}/${eventLat},${eventLon}`;
-                window.open(googleMapsUrl, '_blank');
-                notifications.add('warning', 'Timeout routing - apertura Google Maps');
-                closeEventDetails();
+        // Funzione per aprire l'app di mappe nativa
+        function openNativeMap(lat, lon, userLat = null, userLon = null) {
+          const device = detectDevice();
+          let url = '';
+          
+          // Costruisci l'indirizzo leggibile per il guasto
+          const eventData = currentEventFeature.attributes;
+          const comune = eventData.descrizione_territoriale || 'Evento';
+          const provincia = eventData.provincia || '';
+          const address = `${comune}${provincia ? ', ' + provincia : ''}`;
+          
+          if (device === 'ios') {
+            // iOS: Prova prima Apple Maps, poi Google Maps
+            if (userLat && userLon) {
+              // Con posizione di partenza
+              url = `maps://maps.apple.com/?saddr=${userLat},${userLon}&daddr=${lat},${lon}&dirflg=d&t=m`;
+            } else {
+              // Solo destinazione
+              url = `maps://maps.apple.com/?daddr=${lat},${lon}&t=m`;
+            }
+            
+            // Prova ad aprire Apple Maps
+            const iframe = document.createElement('iframe');
+            iframe.style.display = 'none';
+            iframe.src = url;
+            document.body.appendChild(iframe);
+            
+            // Fallback per Google Maps su iOS dopo 1 secondo
+            setTimeout(() => {
+              document.body.removeChild(iframe);
+              let googleUrl = '';
+              if (userLat && userLon) {
+                googleUrl = `comgooglemaps://?saddr=${userLat},${userLon}&daddr=${lat},${lon}&directionsmode=driving`;
+              } else {
+                googleUrl = `comgooglemaps://?daddr=${lat},${lon}&directionsmode=driving`;
               }
-            }, 10000);
+              
+              const googleIframe = document.createElement('iframe');
+              googleIframe.style.display = 'none';
+              googleIframe.src = googleUrl;
+              document.body.appendChild(googleIframe);
+              
+              // Ultimo fallback: browser
+              setTimeout(() => {
+                document.body.removeChild(googleIframe);
+                const browserUrl = userLat && userLon 
+                  ? `https://maps.apple.com/?saddr=${userLat},${userLon}&daddr=${lat},${lon}&dirflg=d`
+                  : `https://maps.apple.com/?daddr=${lat},${lon}`;
+                window.open(browserUrl, '_blank');
+              }, 1000);
+            }, 1000);
+            
+          } else if (device === 'android') {
+            // Android: Google Maps app
+            if (userLat && userLon) {
+              url = `google.navigation:q=${lat},${lon}&mode=d`;
+            } else {
+              url = `geo:${lat},${lon}?q=${lat},${lon}(${encodeURIComponent(address)})`;
+            }
+            
+            // Prova ad aprire Google Maps app
+            window.location.href = url;
+            
+            // Fallback per browser dopo 2 secondi
+            setTimeout(() => {
+              const browserUrl = userLat && userLon
+                ? `https://www.google.com/maps/dir/${userLat},${userLon}/${lat},${lon}`
+                : `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+              window.open(browserUrl, '_blank');
+            }, 2000);
+            
+          } else {
+            // Desktop o dispositivi non riconosciuti: apri nel browser
+            const browserUrl = userLat && userLon
+              ? `https://www.google.com/maps/dir/${userLat},${userLon}/${lat},${lon}`
+              : `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+            window.open(browserUrl, '_blank');
+          }
+        }
 
-            control.on('routesfound', function(e) {
-              routeFound = true;
-              clearTimeout(timeoutId);
-
-              try {
-                const routes = e.routes;
-                if (routes && routes.length > 0) {
-                  const route = routes[0];
-
-                  if (route.coordinates && route.coordinates.length > 0) {
-                    // Adatta la mappa alla rotta
-                    const bounds = L.latLngBounds(route.coordinates);
-                    map.fitBounds(bounds.pad(0.1));
-
-                    notifications.add('success', 'Indicazioni generate! Percorso visualizzato sulla mappa');
-                    closeEventDetails();
-                  } else {
-                    throw new Error('Coordinate rotta non valide');
-                  }
-                } else {
-                  throw new Error('Nessuna rotta trovata');
-                }
-              } catch (err) {
-                console.error('Errore elaborazione rotta:', err);
-                const googleMapsUrl = `https://www.google.com/maps/dir/${userLat},${userLon}/${eventLat},${eventLon}`;
-                window.open(googleMapsUrl, '_blank');
-                notifications.add('warning', 'Errore routing - apertura Google Maps');
-                closeEventDetails();
-              }
-            });
-
-            control.on('routingerror', function(e) {
-              routeFound = true;
-              clearTimeout(timeoutId);
-              console.error('Errore routing:', e);
-
-              try {
-                map.removeControl(control);
-              } catch (err) {}
-
-              const googleMapsUrl = `https://www.google.com/maps/dir/${userLat},${userLon}/${eventLat},${eventLon}`;
-              window.open(googleMapsUrl, '_blank');
-              notifications.add('warning', 'Servizio routing non disponibile - apertura Google Maps');
+        // Prova a ottenere la posizione dell'utente
+        if (navigator.geolocation) {
+          notifications.add('info', 'Richiesta posizione in corso...');
+          
+          navigator.geolocation.getCurrentPosition(
+            (position) => {
+              const userLat = position.coords.latitude;
+              const userLon = position.coords.longitude;
+              openNativeMap(eventLat, eventLon, userLat, userLon);
+              notifications.add('success', 'Navigazione avviata con la tua posizione');
               closeEventDetails();
-            });
-
-            // Aggiungi il controllo alla mappa
-            control.addTo(map);
-
-          } catch (err) {
-            console.error('Errore inizializzazione routing:', err);
-            const googleMapsUrl = `https://www.google.com/maps/dir/${userLat},${userLon}/${eventLat},${eventLon}`;
-            window.open(googleMapsUrl, '_blank');
-            notifications.add('warning', 'Errore sistema routing - apertura Google Maps');
-            closeEventDetails();
-          }
-        }, (error) => {
-          let errorMessage = 'Geolocalizzazione: ';
-          switch(error.code) {
-            case error.PERMISSION_DENIED:
-              errorMessage += 'Permesso negato';
-              break;
-            case error.POSITION_UNAVAILABLE:
-              errorMessage += 'Posizione non disponibile';
-              break;
-            case error.TIMEOUT:
-              errorMessage += 'Timeout richiesta';
-              break;
-            default:
-              errorMessage += 'Errore sconosciuto';
-          }
-
-          // Fallback: apri Google Maps senza posizione utente
-          const googleMapsUrl = `https://www.google.com/maps/dir///${eventLat},${eventLon}/@${eventLat},${eventLon},15z`;
-          window.open(googleMapsUrl, '_blank');
-          notifications.add('warning', errorMessage + ' - Apertura Google Maps');
+            },
+            (error) => {
+              // Errore geolocalizzazione: apri senza posizione di partenza
+              console.warn('Geolocalizzazione fallita:', error);
+              openNativeMap(eventLat, eventLon);
+              notifications.add('info', 'Navigazione avviata (posizione non disponibile)');
+              closeEventDetails();
+            },
+            {
+              timeout: 10000,
+              enableHighAccuracy: false,
+              maximumAge: 300000 // 5 minuti
+            }
+          );
+        } else {
+          // Geolocalizzazione non supportata
+          openNativeMap(eventLat, eventLon);
+          notifications.add('info', 'Navigazione avviata');
           closeEventDetails();
-        }, {
-          enableHighAccuracy: false,
-          timeout: 10000,
-          maximumAge: 300000
-        });
+        }
       }
 
 
@@ -1928,6 +1906,23 @@
         settingsModal.setAttribute('aria-hidden', 'true');
       }
 
+      // Aggiungi event listener per chiusura impostazioni
+      settingsClose?.addEventListener('click', closeSettingsModal);
+      settingsClose2?.addEventListener('click', closeSettingsModal);
+      settingsBackdrop?.addEventListener('click', closeSettingsModal);
+
+      // Event listener per pulsanti principali delle impostazioni
+      document.getElementById('settingsSave')?.addEventListener('click', saveSettings);
+      document.getElementById('settingsReset')?.addEventListener('click', resetSettings);
+      document.getElementById('testSoundBtn')?.addEventListener('click', playNotificationSound);
+      document.getElementById('requestNotificationPermission')?.addEventListener('click', requestNotificationPermission);
+      
+      // Event listener per aggiornamento volume in tempo reale
+      document.getElementById('settingVolume')?.addEventListener('input', function() {
+        const volumeLabel = document.getElementById('volumeLabel');
+        if (volumeLabel) volumeLabel.textContent = this.value + '%';
+      });
+
       function loadSettings() {
         try {
           const saved = localStorage.getItem('poweringuasti_settings');
@@ -2003,8 +1998,11 @@
           document.getElementById('volumeLabel').textContent = currentSettings.volume + '%';
 
           notifications.add('success', 'Impostazioni salvate con successo');
-
-
+          
+          // Chiudi automaticamente il modal dopo il salvataggio
+          setTimeout(() => {
+            closeSettingsModal();
+          }, 1000);
 
         } catch (e) {
           notifications.add('error', 'Errore nel salvataggio delle impostazioni');
@@ -2190,6 +2188,29 @@
           panel.style.display = 'none';
           statusEl.textContent = 'Non Supportate';
           statusEl.style.color = '#6c757d';
+        }
+      }
+
+      // Funzione per aggiornare lo stato del sistema
+      function updateSystemStatus() {
+        try {
+          const statusIndicator = document.querySelector('.status-indicator');
+          if (statusIndicator) {
+            // Simula controllo connessione
+            if (navigator.onLine) {
+              statusIndicator.className = 'status-indicator status-online';
+            } else {
+              statusIndicator.className = 'status-indicator status-offline';
+            }
+          }
+          
+          // Aggiorna altre informazioni di sistema se necessario
+          const systemStatus = document.getElementById('systemStatus');
+          if (systemStatus) {
+            systemStatus.textContent = navigator.onLine ? 'Online' : 'Offline';
+          }
+        } catch (e) {
+          console.warn('Errore aggiornamento stato sistema:', e);
         }
       }
 
